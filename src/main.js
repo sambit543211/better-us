@@ -6,40 +6,105 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const hasCloud = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && !SUPABASE_URL.includes('your-project'));
 const supabase = hasCloud ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
+const APP_NAME = 'Better Us';
+const FIXED_COUPLE_ID = 'sammy-shreya-private';
+
+const PEOPLE = [
+  { id: 'sammy', display_name: 'Sammy', emoji: '🌞', color: 'coral' },
+  { id: 'shreya', display_name: 'Shreya', emoji: '🌙', color: 'mint' },
+];
+
 const GOALS = {
   protein: 60,
-  stepsStart: 8000,
-  stepsStretch: 10000,
+  steps: 8000,
+  stretchSteps: 10000,
   water: 2.5,
-  sleepBefore: '00:00',
   alcoholMonthlyLimit: 2,
+  dailyMaxScore: 10,
 };
 
-const defaultMeals = [
-  { key: 'breakfast', label: 'Breakfast', idea: 'Eggs / oats / curd bowl' },
-  { key: 'lunch', label: 'Lunch', idea: 'Chicken/fish + rice/roti + dal + greens' },
-  { key: 'snack', label: 'Snack', idea: 'Fruit + chana / eggs / curd' },
-  { key: 'dinner', label: 'Dinner', idea: 'Fish/chicken/prawns + veggies + salad' },
+const MEALS = [
+  {
+    key: 'breakfast',
+    label: 'Breakfast',
+    idea: 'Eggs / oats / curd bowl',
+    presets: [
+      ['2 eggs', 12],
+      ['3 egg omelette', 18],
+      ['Curd bowl', 8],
+      ['Oats + curd', 12],
+    ],
+  },
+  {
+    key: 'lunch',
+    label: 'Lunch',
+    idea: 'Chicken/fish + rice/roti + dal + greens',
+    presets: [
+      ['Chicken 100g', 25],
+      ['Fish 100g', 22],
+      ['Dal bowl', 8],
+      ['Green sabzi', 3],
+    ],
+  },
+  {
+    key: 'snack',
+    label: 'Snack',
+    idea: 'Fruit + chana / eggs / curd',
+    presets: [
+      ['Roasted chana', 10],
+      ['Boiled egg', 6],
+      ['Greek curd', 12],
+      ['Sprouts', 9],
+    ],
+  },
+  {
+    key: 'dinner',
+    label: 'Dinner',
+    idea: 'Fish/chicken/prawns + veggies + salad',
+    presets: [
+      ['Prawns 100g', 24],
+      ['Fish curry', 22],
+      ['Chicken curry', 25],
+      ['Paneer 100g', 18],
+    ],
+  },
 ];
+
+const MOOD_SLOTS = [
+  ['09', '9 AM'],
+  ['12', '12 PM'],
+  ['15', '3 PM'],
+  ['18', '6 PM'],
+  ['21', '9 PM'],
+  ['24', '12 AM'],
+];
+
+const MOOD_OPTIONS = ['', 'Great', 'Good', 'Okay', 'Low', 'Stressed', 'Tired', 'Calm', 'Irritated'];
 
 const state = {
   session: null,
   profile: null,
-  partnerProfiles: [],
   entries: [],
-  selectedDate: today(),
-  localPerson: localStorage.getItem('localPerson') || 'Partner A',
+  messages: [],
+  selectedDate: localDate(),
+  activeView: localStorage.getItem('betterUsActiveView') || 'today',
+  selectedPerson: localStorage.getItem('betterUsSelectedPerson') || '',
   message: '',
 };
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
+function localDate(date = new Date()) {
+  const copy = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return copy.toISOString().slice(0, 10);
+}
+
+function addDays(dateStr, days) {
+  const date = new Date(`${dateStr}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return localDate(date);
 }
 
 function daysAgo(n) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  return addDays(localDate(), -n);
 }
 
 function uid() {
@@ -56,37 +121,68 @@ function normalizeTime(time) {
   return String(time).slice(0, 5);
 }
 
-function isBeforeMidnight(time) {
-  if (!time) return false;
+function timeToMinutes(time) {
+  if (!time) return null;
   const [h, m] = time.split(':').map(Number);
-  return h < 24 && (h < 24 || m === 0);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h * 60 + m;
 }
 
-function calculateScore(habits, meals) {
-  const totalProtein = totalMealProtein(meals);
-  const points = [
-    totalProtein >= GOALS.protein,
-    safeNumber(habits.steps) >= GOALS.stepsStart,
-    safeNumber(habits.workoutMinutes) >= 20 || habits.workoutType === 'Badminton',
-    safeNumber(habits.cigarettes) === 0,
-    safeNumber(habits.alcoholDrinks) === 0,
-    Boolean(habits.mobility),
-    Boolean(habits.reading),
-    isBeforeMidnight(habits.sleepTime),
-  ];
-  return points.filter(Boolean).length;
+function sleptBeforeMidnight(time) {
+  const mins = timeToMinutes(time);
+  if (mins === null) return false;
+  return mins <= 23 * 60 + 59;
 }
 
 function totalMealProtein(meals = {}) {
-  return defaultMeals.reduce((sum, meal) => sum + safeNumber(meals?.[meal.key]?.protein), 0);
+  return MEALS.reduce((sum, meal) => sum + safeNumber(meals?.[meal.key]?.protein), 0);
 }
 
-function getLocalStore() {
-  return JSON.parse(localStorage.getItem('coupleHealthEntries') || '[]');
+function hasText(value) {
+  return Boolean(String(value || '').trim());
 }
 
-function setLocalStore(entries) {
-  localStorage.setItem('coupleHealthEntries', JSON.stringify(entries));
+function getPerson(personId = currentPersonId()) {
+  return PEOPLE.find((p) => p.id === personId) || PEOPLE[0];
+}
+
+function personName(personId = currentPersonId()) {
+  return getPerson(personId).display_name;
+}
+
+function partnerId(personId = currentPersonId()) {
+  return personId === 'sammy' ? 'shreya' : 'sammy';
+}
+
+function orderedPeople() {
+  const selected = currentPersonId() || 'sammy';
+  return [getPerson(selected), getPerson(partnerId(selected))];
+}
+
+function currentPersonId() {
+  if (hasCloud && state.profile?.persona) return state.profile.persona;
+  return state.selectedPerson;
+}
+
+function currentDisplayName() {
+  const id = currentPersonId();
+  return id ? personName(id) : 'Choose Sammy or Shreya';
+}
+
+function getLocalEntries() {
+  return JSON.parse(localStorage.getItem('betterUsEntriesV2') || '[]');
+}
+
+function setLocalEntries(entries) {
+  localStorage.setItem('betterUsEntriesV2', JSON.stringify(entries));
+}
+
+function getLocalMessages() {
+  return JSON.parse(localStorage.getItem('betterUsMessagesV2') || '[]');
+}
+
+function setLocalMessages(messages) {
+  localStorage.setItem('betterUsMessagesV2', JSON.stringify(messages));
 }
 
 async function boot() {
@@ -105,14 +201,17 @@ async function boot() {
 
 async function hydrate() {
   state.message = '';
+
   if (!hasCloud) {
-    state.entries = getLocalStore();
+    state.entries = getLocalEntries();
+    state.messages = getLocalMessages();
     return;
   }
+
   if (!state.session) {
     state.profile = null;
     state.entries = [];
-    state.partnerProfiles = [];
+    state.messages = [];
     return;
   }
 
@@ -126,51 +225,46 @@ async function hydrate() {
   if (profileError) state.message = profileError.message;
   state.profile = profile;
 
-  if (!profile?.couple_id) return;
+  if (profile?.persona) {
+    state.selectedPerson = profile.persona;
+    localStorage.setItem('betterUsSelectedPerson', profile.persona);
+  }
 
-  const since = daysAgo(45);
-  const [{ data: entries, error: entriesError }, { data: profiles, error: partnersError }] = await Promise.all([
+  const since = daysAgo(90);
+  const [entriesResult, messagesResult] = await Promise.all([
     supabase
       .from('daily_entries')
       .select('*')
+      .eq('couple_id', FIXED_COUPLE_ID)
       .gte('entry_date', since)
       .order('entry_date', { ascending: false }),
     supabase
-      .from('profiles')
+      .from('message_cards')
       .select('*')
-      .eq('couple_id', profile.couple_id),
+      .eq('couple_id', FIXED_COUPLE_ID)
+      .gte('end_date', since)
+      .order('created_at', { ascending: false }),
   ]);
 
-  if (entriesError) state.message = entriesError.message;
-  if (partnersError) state.message = partnersError.message;
-  state.entries = entries || [];
-  state.partnerProfiles = profiles || [];
+  if (entriesResult.error) state.message = entriesResult.error.message;
+  if (messagesResult.error) state.message = messagesResult.error.message;
+
+  state.entries = entriesResult.data || [];
+  state.messages = messagesResult.data || [];
 }
 
-function currentPersonId() {
-  return hasCloud ? state.session?.user?.id : state.localPerson;
-}
-
-function currentCoupleId() {
-  return hasCloud ? state.profile?.couple_id : 'local-couple';
-}
-
-function currentDisplayName() {
-  if (hasCloud) return state.profile?.display_name || state.session?.user?.email || 'You';
-  return state.localPerson;
-}
-
-function findEntry(personId = currentPersonId(), date = state.selectedDate) {
-  return state.entries.find((e) => e.user_id === personId && e.entry_date === date);
+function blankMoodTimeline() {
+  return Object.fromEntries(MOOD_SLOTS.map(([key]) => [key, { mood: '', note: '' }]));
 }
 
 function blankEntry() {
   return {
-    meals: Object.fromEntries(defaultMeals.map((m) => [m.key, { text: '', protein: '' }])),
+    meals: Object.fromEntries(MEALS.map((m) => [m.key, { text: '', protein: '', image: '' }])),
     habits: {
       steps: '',
       workoutType: '',
       workoutMinutes: '',
+      workoutImage: '',
       cigarettes: 0,
       alcoholDrinks: 0,
       cheatMeal: false,
@@ -179,38 +273,118 @@ function blankEntry() {
       sleepTime: '23:45',
       wakeTime: '07:30',
       water: '',
-      mood: 'Good',
+      cravings: 0,
+      energy: 'Good',
+      soreness: 'Low',
+      moodTimeline: blankMoodTimeline(),
       notes: '',
+    },
+    reflection: {
+      grateful: '',
+      smile: '',
+      comments: '',
     },
   };
 }
 
+function findEntry(personId = currentPersonId(), date = state.selectedDate) {
+  if (!personId) return null;
+  return state.entries.find((e) => (e.person_key || e.user_id) === personId && e.entry_date === date);
+}
+
 function getEditableEntry() {
   const existing = findEntry();
-  if (!existing) return blankEntry();
+  const blank = blankEntry();
+  if (!existing) return blank;
   return {
-    meals: { ...blankEntry().meals, ...(existing.meals || {}) },
-    habits: { ...blankEntry().habits, ...(existing.habits || {}) },
+    meals: mergeMeals(blank.meals, existing.meals || {}),
+    habits: {
+      ...blank.habits,
+      ...(existing.habits || {}),
+      moodTimeline: { ...blankMoodTimeline(), ...(existing.habits?.moodTimeline || {}) },
+    },
+    reflection: { ...blank.reflection, ...(existing.reflection || {}) },
   };
+}
+
+function mergeMeals(blank, saved) {
+  const next = { ...blank };
+  MEALS.forEach((meal) => {
+    next[meal.key] = { ...blank[meal.key], ...(saved?.[meal.key] || {}) };
+  });
+  return next;
+}
+
+function calculateScore(habits, meals, reflection) {
+  const totalProtein = totalMealProtein(meals);
+  const points = [
+    totalProtein >= GOALS.protein,
+    safeNumber(habits.steps) >= GOALS.steps,
+    safeNumber(habits.workoutMinutes) >= 20 || habits.workoutType === 'Badminton',
+    safeNumber(habits.cigarettes) === 0,
+    safeNumber(habits.alcoholDrinks) === 0,
+    Boolean(habits.mobility),
+    Boolean(habits.reading),
+    sleptBeforeMidnight(habits.sleepTime),
+    hasText(reflection.grateful),
+    hasText(reflection.smile),
+  ];
+  return points.filter(Boolean).length;
+}
+
+async function chooseIdentity(persona) {
+  state.selectedPerson = persona;
+  localStorage.setItem('betterUsSelectedPerson', persona);
+
+  if (hasCloud && state.session) {
+    const person = getPerson(persona);
+    const { error } = await supabase.from('profiles').upsert({
+      id: state.session.user.id,
+      couple_id: FIXED_COUPLE_ID,
+      persona,
+      display_name: person.display_name,
+    });
+    state.message = error ? error.message : `Signed in as ${person.display_name}.`;
+    await hydrate();
+  }
+  render();
 }
 
 async function saveEntryFromForm(event) {
   event.preventDefault();
+  if (!currentPersonId()) {
+    state.message = 'Choose Sammy or Shreya first.';
+    render();
+    return;
+  }
+
   const form = new FormData(event.currentTarget);
+  const existing = getEditableEntry();
 
   const meals = {};
-  defaultMeals.forEach((meal) => {
+  for (const meal of MEALS) {
     meals[meal.key] = {
       text: form.get(`${meal.key}_text`)?.toString() || '',
       protein: safeNumber(form.get(`${meal.key}_protein`), 0),
+      image: await imageFromInput(form.get(`${meal.key}_image`), existing.meals?.[meal.key]?.image || ''),
     };
-  });
+  }
+
+  const moodTimeline = {};
+  for (const [key] of MOOD_SLOTS) {
+    moodTimeline[key] = {
+      mood: form.get(`mood_${key}`)?.toString() || '',
+      note: form.get(`mood_${key}_note`)?.toString() || '',
+    };
+  }
 
   const habits = {
     steps: safeNumber(form.get('steps'), 0),
     workoutType: form.get('workoutType')?.toString() || '',
     workoutMinutes: safeNumber(form.get('workoutMinutes'), 0),
+    workoutImage: await imageFromInput(form.get('workoutImage'), existing.habits?.workoutImage || ''),
     cigarettes: safeNumber(form.get('cigarettes'), 0),
+    cravings: safeNumber(form.get('cravings'), 0),
     alcoholDrinks: safeNumber(form.get('alcoholDrinks'), 0),
     cheatMeal: form.get('cheatMeal') === 'on',
     mobility: form.get('mobility') === 'on',
@@ -218,35 +392,113 @@ async function saveEntryFromForm(event) {
     sleepTime: normalizeTime(form.get('sleepTime')),
     wakeTime: normalizeTime(form.get('wakeTime')),
     water: safeNumber(form.get('water'), 0),
-    mood: form.get('mood')?.toString() || 'Good',
+    energy: form.get('energy')?.toString() || 'Good',
+    soreness: form.get('soreness')?.toString() || 'Low',
+    moodTimeline,
     notes: form.get('notes')?.toString() || '',
   };
 
-  const score = calculateScore(habits, meals);
-  const user_id = currentPersonId();
-  const couple_id = currentCoupleId();
+  const reflection = {
+    grateful: form.get('grateful')?.toString() || '',
+    smile: form.get('smile')?.toString() || '',
+    comments: form.get('comments')?.toString() || '',
+  };
+
+  const score = calculateScore(habits, meals, reflection);
+  const person_key = currentPersonId();
+  const couple_id = FIXED_COUPLE_ID;
   const entry_date = state.selectedDate;
 
+  const tomorrowMessage = form.get('tomorrowMessage')?.toString().trim();
+  const messageDuration = Math.max(1, safeNumber(form.get('messageDuration'), 1));
+  const messageStartChoice = form.get('messageStart')?.toString() || 'tomorrow';
+  const start_date = messageStartChoice === 'today' ? entry_date : addDays(entry_date, 1);
+  const end_date = addDays(start_date, messageDuration - 1);
+  const audience = form.get('messageAudience')?.toString() || 'both';
+
   if (hasCloud) {
-    if (!state.profile?.couple_id) {
-      state.message = 'Create or join a couple first.';
+    const { error } = await supabase
+      .from('daily_entries')
+      .upsert({ person_key, couple_id, entry_date, meals, habits, reflection, score }, { onConflict: 'couple_id,person_key,entry_date' });
+
+    if (error) {
+      state.message = error.message;
+      await hydrate();
       render();
       return;
     }
-    const { error } = await supabase
-      .from('daily_entries')
-      .upsert({ user_id, couple_id, entry_date, meals, habits, score }, { onConflict: 'user_id,entry_date' });
-    state.message = error ? error.message : 'Saved. Your partner can see this after refresh.';
+
+    if (tomorrowMessage) {
+      const { error: messageError } = await supabase.from('message_cards').insert({
+        couple_id,
+        author_key: person_key,
+        author_name: currentDisplayName(),
+        message_text: tomorrowMessage,
+        audience,
+        start_date,
+        end_date,
+      });
+      if (messageError) state.message = messageError.message;
+    }
+
+    if (!state.message) state.message = `${currentDisplayName()}'s day is saved.`;
   } else {
-    const entries = getLocalStore().filter((e) => !(e.user_id === user_id && e.entry_date === entry_date));
-    entries.push({ id: uid(), user_id, couple_id, entry_date, meals, habits, score, updated_at: new Date().toISOString() });
-    setLocalStore(entries);
+    const entries = getLocalEntries().filter((e) => !((e.person_key || e.user_id) === person_key && e.entry_date === entry_date));
+    entries.push({ id: uid(), person_key, user_id: person_key, couple_id, entry_date, meals, habits, reflection, score, updated_at: new Date().toISOString() });
+    setLocalEntries(entries);
     state.entries = entries;
-    state.message = 'Saved locally on this browser. Use export/import or connect Supabase for shared tracking.';
+
+    if (tomorrowMessage) {
+      const messages = getLocalMessages();
+      messages.push({
+        id: uid(),
+        couple_id,
+        author_key: person_key,
+        author_id: person_key,
+        author_name: currentDisplayName(),
+        message_text: tomorrowMessage,
+        audience,
+        start_date,
+        end_date,
+        created_at: new Date().toISOString(),
+      });
+      setLocalMessages(messages);
+      state.messages = messages;
+    }
+    state.message = `${currentDisplayName()}'s day is saved in this browser.`;
   }
 
   await hydrate();
   render();
+}
+
+function imageFromInput(fileLike, fallback = '') {
+  if (!(fileLike instanceof File) || !fileLike.size) return Promise.resolve(fallback);
+  return compressImage(fileLike, 1100, 0.78);
+}
+
+function compressImage(file, maxSide = 1100, quality = 0.78) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read image'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Could not load image'));
+      img.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 async function signIn(event) {
@@ -257,7 +509,7 @@ async function signIn(event) {
   const mode = form.get('mode')?.toString();
   const action = mode === 'signup' ? supabase.auth.signUp : supabase.auth.signInWithPassword;
   const { error } = await action.call(supabase.auth, { email, password });
-  state.message = error ? error.message : mode === 'signup' ? 'Account created. Check email if confirmation is enabled, then sign in.' : 'Signed in.';
+  state.message = error ? error.message : mode === 'signup' ? 'Account created. Check email if confirmation is enabled, then sign in.' : 'Signed in. Now choose Sammy or Shreya.';
   await hydrate();
   render();
 }
@@ -267,33 +519,23 @@ async function signOut() {
   state.session = null;
   state.profile = null;
   state.entries = [];
+  state.messages = [];
   render();
 }
 
-async function onboarding(event, mode) {
-  event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  const displayName = form.get('displayName')?.toString() || 'Partner';
-  const inviteCode = form.get('inviteCode')?.toString() || randomCode();
-  const fn = mode === 'create' ? 'create_couple_with_profile' : 'join_couple_with_profile';
-  const { error } = await supabase.rpc(fn, { display_name: displayName, invite_code: inviteCode });
-  state.message = error ? error.message : mode === 'create' ? `Couple created. Invite code: ${inviteCode.toUpperCase()}` : 'Joined couple.';
-  await hydrate();
+function resetIdentity() {
+  state.selectedPerson = '';
+  localStorage.removeItem('betterUsSelectedPerson');
   render();
-}
-
-function randomCode() {
-  const words = ['TEAM', 'FIT', 'HEART', 'STREAK', 'MOVE'];
-  return `${words[Math.floor(Math.random() * words.length)]}${Math.floor(100 + Math.random() * 900)}`;
 }
 
 function exportData() {
-  const payload = JSON.stringify({ exportedAt: new Date().toISOString(), entries: state.entries }, null, 2);
+  const payload = JSON.stringify({ exportedAt: new Date().toISOString(), entries: state.entries, messages: state.messages }, null, 2);
   const blob = new Blob([payload], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `couple-health-backup-${today()}.json`;
+  link.download = `better-us-backup-${localDate()}.json`;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -306,8 +548,10 @@ function importData(event) {
     try {
       const parsed = JSON.parse(reader.result);
       if (!Array.isArray(parsed.entries)) throw new Error('Invalid backup file');
-      setLocalStore(parsed.entries);
+      setLocalEntries(parsed.entries);
+      setLocalMessages(Array.isArray(parsed.messages) ? parsed.messages : []);
       state.entries = parsed.entries;
+      state.messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       state.message = 'Backup imported into local mode.';
       render();
     } catch (error) {
@@ -326,8 +570,8 @@ function render() {
       ${state.message ? `<div class="toast">${escapeHtml(state.message)}</div>` : ''}
       ${!hasCloud ? localModeBanner() : ''}
       ${hasCloud && !state.session ? authView() : ''}
-      ${hasCloud && state.session && !state.profile?.couple_id ? onboardingView() : ''}
-      ${(!hasCloud || (state.session && state.profile?.couple_id)) ? trackerView() : ''}
+      ${(!hasCloud || state.session) && !currentPersonId() ? identityPicker() : ''}
+      ${(!hasCloud || state.session) && currentPersonId() ? appView() : ''}
     </main>
   `;
   bindEvents();
@@ -336,15 +580,18 @@ function render() {
 function hero() {
   return `
     <section class="hero">
-      <div>
-        <p class="eyebrow">Two of Us · 90-Day Health Game</p>
-        <h1>Build the healthy couple streak.</h1>
-        <p class="subtitle">Track meals, protein, workouts, sleep, cigarettes, alcohol, badminton, and daily trust check-ins in one playful private dashboard.</p>
+      <div class="brand-lockup">
+        <div class="logo-mark">BU</div>
+        <div>
+          <p class="eyebrow">${APP_NAME} · Sammy × Shreya</p>
+          <h1>A private health game for two.</h1>
+          <p class="subtitle">Track protein, workouts, mood every three hours, no cigarettes, sleep, gratitude, smiles and tomorrow's tiny promises.</p>
+        </div>
       </div>
       <div class="hero-card floaty">
         <span class="heart">♥</span>
         <strong>${escapeHtml(currentDisplayName())}</strong>
-        <small>${hasCloud ? 'Cloud sync ready' : 'Local demo mode'}</small>
+        <small>${hasCloud ? 'Cloud sync ready' : 'Local prototype'}</small>
       </div>
     </section>
   `;
@@ -354,8 +601,8 @@ function localModeBanner() {
   return `
     <section class="notice-grid">
       <div class="notice">
-        <strong>Demo/local mode is active.</strong>
-        <p>Your logs are saved in this browser only. For both of you to use it across phones/laptops, connect Supabase using the README steps.</p>
+        <strong>Prototype mode is active.</strong>
+        <p>Test the look and feel on Vercel now. Supabase can be connected later for shared phone sync and permanent data.</p>
       </div>
       <div class="notice actions-inline">
         <button class="ghost" data-action="export">Export backup JSON</button>
@@ -367,9 +614,9 @@ function localModeBanner() {
 
 function authView() {
   return `
-    <section class="card narrow">
+    <section class="card narrow auth-card">
       <h2>Sign in</h2>
-      <p class="muted">Use Supabase Auth so each partner has their own profile and both logs sync in the same couple dashboard.</p>
+      <p class="muted">After login, choose whether this device is Sammy or Shreya. No invite code or couple space needed.</p>
       <form class="stack" data-form="auth">
         <input name="email" type="email" placeholder="Email" required />
         <input name="password" type="password" placeholder="Password" minlength="6" required />
@@ -383,67 +630,54 @@ function authView() {
   `;
 }
 
-function onboardingView() {
-  const code = randomCode();
+function identityPicker() {
   return `
-    <section class="grid two">
-      <div class="card">
-        <h2>Create your couple space</h2>
-        <p class="muted">Do this once. Share the invite code with your partner.</p>
-        <form class="stack" data-form="create-couple">
-          <input name="displayName" placeholder="Your name" required />
-          <input name="inviteCode" value="${code}" placeholder="Invite code" required />
-          <button type="submit">Create couple</button>
-        </form>
-      </div>
-      <div class="card">
-        <h2>Join your partner</h2>
-        <p class="muted">Use the invite code your partner created.</p>
-        <form class="stack" data-form="join-couple">
-          <input name="displayName" placeholder="Your name" required />
-          <input name="inviteCode" placeholder="Invite code" required />
-          <button type="submit">Join couple</button>
-        </form>
+    <section class="identity-wrap">
+      <div class="card identity-card">
+        <p class="eyebrow">First step</p>
+        <h2>Who is using the app?</h2>
+        <p class="muted">Pick your side. Your side becomes editable. The other side stays visible for comparison and support.</p>
+        <div class="identity-grid">
+          ${PEOPLE.map((p) => `
+            <button class="identity-choice ${p.color}" data-persona="${p.id}" type="button">
+              <span>${p.emoji}</span>
+              <strong>I’m ${p.display_name}</strong>
+              <small>Open ${p.display_name}'s tracker</small>
+            </button>
+          `).join('')}
+        </div>
       </div>
     </section>
   `;
 }
 
-function trackerView() {
-  const entry = getEditableEntry();
-  const stats = getStats();
+function appView() {
   return `
     ${topBar()}
-    ${dashboard(stats)}
-    <section class="grid main-grid">
-      ${dailyForm(entry)}
-      ${sidePanel(stats)}
-    </section>
-    ${plans()}
+    ${activeMessageStrip()}
+    ${navTabs()}
+    ${viewContent()}
   `;
 }
 
 function topBar() {
-  const profiles = hasCloud ? state.partnerProfiles : [{ id: 'Partner A', display_name: 'Partner A' }, { id: 'Partner B', display_name: 'Partner B' }];
+  const me = getPerson(currentPersonId());
   return `
     <section class="topbar card glass">
       <div>
         <label>Date</label>
         <input type="date" value="${state.selectedDate}" data-action="date" />
       </div>
-      ${!hasCloud ? `
-        <div>
-          <label>Who is logging?</label>
-          <select data-action="local-person">
-            ${profiles.map((p) => `<option value="${p.id}" ${p.id === state.localPerson ? 'selected' : ''}>${p.display_name}</option>`).join('')}
-          </select>
-        </div>` : `
-        <div>
-          <label>Couple members</label>
-          <div class="pill-row">${profiles.map((p) => `<span class="pill">${escapeHtml(p.display_name)}</span>`).join('')}</div>
-        </div>`}
       <div>
-        <label>Mode</label>
+        <label>You are</label>
+        <div class="person-switch">
+          <span class="avatar small">${me.display_name.slice(0, 1)}</span>
+          <strong>${me.display_name}</strong>
+          <button class="link-button" data-action="switch-person" type="button">Switch</button>
+        </div>
+      </div>
+      <div>
+        <label>View</label>
         <div class="pill good">${hasCloud ? 'Supabase cloud' : 'Local browser'}</div>
       </div>
       ${hasCloud ? `<button class="ghost" data-action="signout">Sign out</button>` : ''}
@@ -451,28 +685,181 @@ function topBar() {
   `;
 }
 
-function dashboard(stats) {
-  const proteinPct = Math.min(100, (stats.todayProtein / GOALS.protein) * 100);
-  const scorePct = Math.min(100, (stats.todayScore / 8) * 100);
-  const stepPct = Math.min(100, (stats.todaySteps / GOALS.stepsStart) * 100);
+function navTabs() {
+  const tabs = [
+    ['today', 'Today', '☀️'],
+    ['meals', 'Meals', '🍲'],
+    ['progress', 'Progress', '📈'],
+    ['us', 'Us', '💛'],
+    ['settings', 'Settings', '⚙️'],
+  ];
   return `
+    <nav class="tabs" aria-label="Main navigation">
+      ${tabs.map(([key, label, icon]) => `
+        <button class="tab ${state.activeView === key ? 'active' : ''}" data-view="${key}" type="button">
+          <span>${icon}</span>${label}
+        </button>
+      `).join('')}
+    </nav>
+  `;
+}
+
+function viewContent() {
+  if (state.activeView === 'meals') return mealsView();
+  if (state.activeView === 'progress') return progressView();
+  if (state.activeView === 'us') return usView();
+  if (state.activeView === 'settings') return settingsView();
+  return todayView();
+}
+
+function todayView() {
+  const entry = getEditableEntry();
+  const stats = getStats();
+  return `
+    ${dashboard(stats)}
+    <section class="grid main-grid">
+      ${dailyForm(entry)}
+      ${sidePanel(stats)}
+    </section>
+  `;
+}
+
+function activeMessageStrip() {
+  const messages = activeMessages(state.selectedDate);
+  if (!messages.length) {
+    return `
+      <section class="message-strip empty">
+        <div class="sticky-note soft">
+          <span class="note-label">Tomorrow note</span>
+          <strong>No active message yet.</strong>
+          <p>Add one during tonight's check-in and it will flash here for the selected number of days.</p>
+        </div>
+      </section>
+    `;
+  }
+  const ordered = [...messages].sort((a, b) => String(a.author_key || a.author_id).localeCompare(String(b.author_key || b.author_id)));
+  return `
+    <section class="message-strip">
+      ${ordered.slice(0, 4).map((m) => `
+        <article class="sticky-note pulse ${m.author_key === 'shreya' || m.author_id === 'shreya' ? 'right-note' : 'left-note'}">
+          <span class="note-label">${escapeHtml(m.author_name || personName(m.author_key || m.author_id))} says</span>
+          <strong>${escapeHtml(m.message_text)}</strong>
+          <p>${formatMessageDates(m)}</p>
+        </article>
+      `).join('')}
+    </section>
+  `;
+}
+
+function activeMessages(date) {
+  const me = currentPersonId();
+  return state.messages.filter((m) => {
+    const starts = m.start_date || date;
+    const ends = m.end_date || starts;
+    const author = m.author_key || m.author_id;
+    const audience = m.audience || 'both';
+    const dateMatch = starts <= date && ends >= date;
+    if (!dateMatch) return false;
+    if (audience === 'both') return true;
+    if (audience === 'me') return author === me;
+    if (audience === 'partner') return author !== me;
+    return true;
+  });
+}
+
+function formatMessageDates(message) {
+  if (message.start_date === message.end_date) return `For ${friendlyDate(message.start_date)}`;
+  return `${friendlyDate(message.start_date)} to ${friendlyDate(message.end_date)}`;
+}
+
+function friendlyDate(dateStr) {
+  return new Date(`${dateStr}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+function dashboard(stats) {
+  const peopleStats = orderedPeople().map((p) => personTodayStats(p.id));
+  const coupleScore = peopleStats.reduce((sum, p) => sum + p.score, 0);
+  const maxScore = peopleStats.length * GOALS.dailyMaxScore;
+  return `
+    <section class="score-hero card">
+      <div>
+        <p class="label">Today's couple score</p>
+        <h2>${coupleScore}<span>/${maxScore}</span></h2>
+        <p class="muted">Left side is yours. Right side is your partner's. Compare gently, support quickly.</p>
+      </div>
+      <div class="score-orb">${Math.round((coupleScore / Math.max(1, maxScore)) * 100)}%</div>
+    </section>
+
+    <section class="person-grid compare-grid">
+      ${peopleStats.map((p, index) => personCard(p, index === 0 ? 'Mine' : 'Partner')).join('')}
+    </section>
+
     <section class="dash-grid">
-      ${metricCard('Today score', `${stats.todayScore}/8`, scorePct, 'Daily habit points')}
-      ${metricCard('Protein', `${stats.todayProtein}g`, proteinPct, 'Target 60g+')}
-      ${metricCard('Steps', `${stats.todaySteps}`, stepPct, 'Target 8k now, 10k later')}
+      ${metricCard('Your score', `${stats.todayScore}/${GOALS.dailyMaxScore}`, (stats.todayScore / GOALS.dailyMaxScore) * 100, 'Daily habit points')}
+      ${metricCard('Protein', `${stats.todayProtein}g`, (stats.todayProtein / GOALS.protein) * 100, 'Target 60g+')}
+      ${metricCard('Steps', `${stats.todaySteps}`, (stats.todaySteps / GOALS.steps) * 100, 'Target 8k now, 10k later')}
       <div class="card streak-card">
         <p class="label">No cigarette streak</p>
         <h3>${stats.noCigStreak} days</h3>
-        <p class="muted">Complete quit from day 1. The rule: never buy just one.</p>
+        <p class="muted">Complete quit from day 1. No “just one” rule.</p>
       </div>
     </section>
   `;
 }
 
+function personTodayStats(personId) {
+  const entry = findEntry(personId, state.selectedDate);
+  const timeline = entry?.habits?.moodTimeline || {};
+  return {
+    id: personId,
+    name: personName(personId),
+    protein: totalMealProtein(entry?.meals || {}),
+    steps: safeNumber(entry?.habits?.steps),
+    workout: entry?.habits?.workoutType || 'Pending',
+    cigarettes: safeNumber(entry?.habits?.cigarettes),
+    sleep: entry?.habits?.sleepTime || 'Pending',
+    score: safeNumber(entry?.score),
+    grateful: entry?.reflection?.grateful || '',
+    smile: entry?.reflection?.smile || '',
+    timeline,
+  };
+}
+
+function personCard(p, label) {
+  return `
+    <article class="card person-card ${p.id === currentPersonId() ? 'selected' : ''}">
+      <div class="person-head">
+        <div class="avatar">${p.name.slice(0, 1).toUpperCase()}</div>
+        <div>
+          <span class="owner-label">${label}</span>
+          <h3>${escapeHtml(p.name)}</h3>
+          <p class="muted">Score ${p.score}/${GOALS.dailyMaxScore}</p>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Protein <b>${p.protein}/${GOALS.protein}g</b></span>
+        <span>Steps <b>${p.steps}/${GOALS.steps}</b></span>
+        <span>Workout <b>${escapeHtml(p.workout)}</b></span>
+        <span>Cigs <b>${p.cigarettes}</b></span>
+        <span>Sleep <b>${escapeHtml(p.sleep)}</b></span>
+      </div>
+      <div class="mood-strip-small">
+        ${MOOD_SLOTS.map(([key, label]) => `<span title="${label}: ${escapeHtml(p.timeline?.[key]?.mood || 'Not logged')}">${moodEmoji(p.timeline?.[key]?.mood)}</span>`).join('')}
+      </div>
+    </article>
+  `;
+}
+
+function moodEmoji(mood) {
+  const map = { Great: '🤩', Good: '🙂', Okay: '😐', Low: '😔', Stressed: '😣', Tired: '🥱', Calm: '😌', Irritated: '😤' };
+  return map[mood] || '○';
+}
+
 function metricCard(label, value, pct, note) {
   const radius = 42;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (pct / 100) * circumference;
+  const safePct = Math.max(0, Math.min(100, pct || 0));
+  const offset = circumference - (safePct / 100) * circumference;
   return `
     <div class="card metric">
       <div class="ring" style="--offset:${offset}; --circ:${circumference}">
@@ -495,34 +882,76 @@ function dailyForm(entry) {
     <section class="card form-card">
       <div class="section-head">
         <div>
-          <h2>Daily check-in</h2>
-          <p class="muted">Log food, workout, sleep and cravings in under 3 minutes.</p>
+          <h2>${escapeHtml(currentDisplayName())}'s daily check-in</h2>
+          <p class="muted">Food, movement, mood, recovery and the small emotional bits that make the habit stick.</p>
         </div>
-        <span class="pill">${escapeHtml(currentDisplayName())}</span>
+        <span class="pill">Editable side</span>
       </div>
       <form data-form="entry">
-        <h3>Meals & protein</h3>
+        <h3>1. Meals & protein</h3>
         <div class="meal-grid">
-          ${defaultMeals.map((meal) => mealInput(meal, entry.meals?.[meal.key])).join('')}
+          ${MEALS.map((meal) => mealInput(meal, entry.meals?.[meal.key])).join('')}
         </div>
 
-        <h3>Habits</h3>
+        <h3>2. Movement, recovery & lifestyle</h3>
         <div class="habit-grid">
           ${numberInput('steps', 'Steps', entry.habits.steps, '8000')}
-          ${selectInput('workoutType', 'Workout', entry.habits.workoutType, ['', 'Strength', 'Cardio', 'Mobility', 'Badminton', 'Walk', 'Rest'])}
-          ${numberInput('workoutMinutes', 'Workout minutes', entry.habits.workoutMinutes, '30')}
+          ${selectInput('workoutType', 'Workout type', entry.habits.workoutType, ['', 'Strength', 'Cardio', 'Badminton', 'Walk', 'Mobility', 'Rest day'])}
+          ${numberInput('workoutMinutes', 'Workout minutes', entry.habits.workoutMinutes, '35')}
           ${numberInput('cigarettes', 'Cigarettes', entry.habits.cigarettes, '0')}
+          ${numberInput('cravings', 'Cigarette craving 0-10', entry.habits.cravings, '0')}
           ${numberInput('alcoholDrinks', 'Alcohol drinks', entry.habits.alcoholDrinks, '0')}
           ${numberInput('water', 'Water litres', entry.habits.water, '2.5', '0.1')}
           ${timeInput('sleepTime', 'Sleep time', entry.habits.sleepTime)}
           ${timeInput('wakeTime', 'Wake time', entry.habits.wakeTime)}
-          ${selectInput('mood', 'Mood', entry.habits.mood, ['Great', 'Good', 'Okay', 'Low', 'Stressed'])}
+          ${selectInput('energy', 'Energy', entry.habits.energy, ['High', 'Good', 'Okay', 'Low'])}
+          ${selectInput('soreness', 'Soreness', entry.habits.soreness, ['None', 'Low', 'Medium', 'High'])}
+          <label class="field photo-field">
+            <span>Workout photo</span>
+            <input name="workoutImage" type="file" accept="image/*" />
+            ${entry.habits.workoutImage ? `<img class="photo-preview" src="${entry.habits.workoutImage}" alt="Workout upload" />` : '<small class="muted">Optional: upload gym, walk or badminton proof.</small>'}
+          </label>
         </div>
 
         <div class="checks">
           ${checkInput('mobility', '10 min mobility', entry.habits.mobility)}
-          ${checkInput('reading', '15 min reading before sleep', entry.habits.reading)}
-          ${checkInput('cheatMeal', 'Weekly cheat meal used today', entry.habits.cheatMeal)}
+          ${checkInput('reading', '15 min reading', entry.habits.reading)}
+          ${checkInput('cheatMeal', 'Weekly cheat meal used', entry.habits.cheatMeal)}
+        </div>
+
+        <h3>3. Mood timeline</h3>
+        <p class="muted tight">Instead of one vague mood for the day, log how you felt every three hours from 9 AM to 12 AM.</p>
+        <div class="mood-grid">
+          ${MOOD_SLOTS.map(([key, label]) => moodInput(key, label, entry.habits.moodTimeline?.[key])).join('')}
+        </div>
+
+        <h3>4. Gratitude ritual</h3>
+        <div class="reflection-grid">
+          <label class="field">
+            <span>One thing I’m grateful for today</span>
+            <textarea name="grateful" rows="3" placeholder="Example: Grateful that we walked after dinner.">${escapeHtml(entry.reflection.grateful || '')}</textarea>
+          </label>
+          <label class="field">
+            <span>One thing that made me smile</span>
+            <textarea name="smile" rows="3" placeholder="Example: She laughed at that stupid joke.">${escapeHtml(entry.reflection.smile || '')}</textarea>
+          </label>
+          <label class="field full-span">
+            <span>Additional comment from today</span>
+            <textarea name="comments" rows="3" placeholder="Anything you want to remember about today.">${escapeHtml(entry.reflection.comments || '')}</textarea>
+          </label>
+        </div>
+
+        <h3>5. Message for tomorrow</h3>
+        <div class="tomorrow-box">
+          <label class="field full-span">
+            <span>Message / challenge</span>
+            <textarea name="tomorrowMessage" rows="3" placeholder="Example: No rice for two days. Light dinner and sleep by 11:45."></textarea>
+          </label>
+          <div class="habit-grid compact">
+            ${selectInput('messageAudience', 'Show this to', 'both', ['both', 'me', 'partner'])}
+            ${selectInput('messageStart', 'Start showing', 'tomorrow', ['tomorrow', 'today'])}
+            ${numberInput('messageDuration', 'Duration in days', 1, '2')}
+          </div>
         </div>
 
         <label class="field full">
@@ -530,7 +959,7 @@ function dailyForm(entry) {
           <textarea name="notes" rows="4" placeholder="Example: Craved cigarette after lunch, walked for 7 minutes instead.">${escapeHtml(entry.habits.notes || '')}</textarea>
         </label>
 
-        <button type="submit" class="save">Save today</button>
+        <button type="submit" class="save">Save ${escapeHtml(currentDisplayName())}'s day</button>
       </form>
     </section>
   `;
@@ -539,14 +968,36 @@ function dailyForm(entry) {
 function mealInput(meal, value = {}) {
   return `
     <div class="meal-card">
+      <div class="meal-title">
+        <strong>${meal.label}</strong>
+        <span>${meal.idea}</span>
+      </div>
       <label>
-        <span>${meal.label}</span>
+        <span>What did you eat?</span>
         <textarea name="${meal.key}_text" rows="3" placeholder="${meal.idea}">${escapeHtml(value.text || '')}</textarea>
       </label>
+      <div class="preset-row">
+        ${meal.presets.map(([text, protein]) => `<button type="button" class="preset" data-meal="${meal.key}" data-text="${escapeHtml(text)}" data-protein="${protein}">+ ${escapeHtml(text)}</button>`).join('')}
+      </div>
       <label>
         <span>Protein g</span>
         <input name="${meal.key}_protein" type="number" min="0" value="${safeNumber(value.protein, '')}" placeholder="15" />
       </label>
+      <label class="photo-upload">
+        <span>Meal photo</span>
+        <input name="${meal.key}_image" type="file" accept="image/*" />
+        ${value.image ? `<img class="photo-preview" src="${value.image}" alt="${meal.label} upload" />` : '<small class="muted">Optional: upload a quick food photo.</small>'}
+      </label>
+    </div>
+  `;
+}
+
+function moodInput(key, label, value = {}) {
+  return `
+    <div class="mood-card">
+      <div><strong>${label}</strong><span>${moodEmoji(value.mood)}</span></div>
+      <select name="mood_${key}">${MOOD_OPTIONS.map((o) => `<option value="${o}" ${o === value.mood ? 'selected' : ''}>${o || 'Not logged'}</option>`).join('')}</select>
+      <input name="mood_${key}_note" value="${escapeHtml(value.note || '')}" placeholder="Tiny note" />
     </div>
   `;
 }
@@ -560,7 +1011,17 @@ function timeInput(name, label, value) {
 }
 
 function selectInput(name, label, value, options) {
-  return `<label class="field"><span>${label}</span><select name="${name}">${options.map((o) => `<option value="${o}" ${o === value ? 'selected' : ''}>${o || 'Choose'}</option>`).join('')}</select></label>`;
+  return `<label class="field"><span>${label}</span><select name="${name}">${options.map((o) => `<option value="${o}" ${o === value ? 'selected' : ''}>${labelForOption(o)}</option>`).join('')}</select></label>`;
+}
+
+function labelForOption(option) {
+  if (!option) return 'Choose';
+  if (option === 'both') return 'Both of us';
+  if (option === 'me') return 'Only me';
+  if (option === 'partner') return 'Partner';
+  if (option === 'tomorrow') return 'Tomorrow';
+  if (option === 'today') return 'Today';
+  return option;
 }
 
 function checkInput(name, label, checked) {
@@ -571,27 +1032,27 @@ function sidePanel(stats) {
   return `
     <aside class="side-stack">
       <section class="card">
-        <h2>Buddy accountability</h2>
+        <h2>Buddy pact</h2>
         <div class="buddy-list">
-          <div><strong>Morning promise</strong><p>One sentence each: what habit matters most today?</p></div>
-          <div><strong>No-judgment rescue</strong><p>If someone slips: “What can we do in the next 10 minutes?”</p></div>
-          <div><strong>Sunday review</strong><p>Wins, hard moments, next week’s one adjustment.</p></div>
+          <div><strong>No shame</strong><p>If someone slips, the question is: what can we do in the next 10 minutes?</p></div>
+          <div><strong>No hiding</strong><p>Cigarettes, alcohol and missed workouts are logged honestly.</p></div>
+          <div><strong>No missing twice</strong><p>One off-day is normal. Two becomes the rescue signal.</p></div>
         </div>
       </section>
 
       <section class="card">
         <h2>Last 7 days</h2>
         <div class="mini-bars">
-          ${stats.week.map((d) => `<div><span>${d.day}</span><i style="height:${Math.max(6, d.score * 12)}px"></i><b>${d.score}</b></div>`).join('')}
+          ${stats.week.map((d) => `<div><span>${d.day}</span><i style="height:${Math.max(6, d.score * 10)}px"></i><b>${d.score}</b></div>`).join('')}
         </div>
-        <p class="muted">Aim for 45+ couple points/week, but the real rule is never miss twice.</p>
+        <p class="muted">Aim for 45+ points/week individually. Celebrate consistency, not perfection.</p>
       </section>
 
       <section class="card danger-soft">
         <h2>Cigarette craving protocol</h2>
         <ol>
           <li>Drink water.</li>
-          <li>Chew saunf/gum.</li>
+          <li>Chew saunf or gum.</li>
           <li>Walk for 5 minutes.</li>
           <li>Delay 10 minutes before acting.</li>
         </ol>
@@ -600,38 +1061,136 @@ function sidePanel(stats) {
   `;
 }
 
-function plans() {
+function mealsView() {
+  const recent = recentMealPhotos();
   return `
-    <section class="plan-grid">
+    <section class="grid two">
       <div class="card">
-        <h2>Food template</h2>
-        <ul class="clean-list">
-          <li><strong>Breakfast:</strong> eggs / oats / curd bowl, 18-25g protein.</li>
-          <li><strong>Lunch:</strong> chicken or fish + dal + green veggies + rice/roti, 25-35g protein.</li>
-          <li><strong>Snack:</strong> roasted chana, curd, fruit, or boiled eggs, 10-15g protein.</li>
-          <li><strong>Dinner:</strong> fish/chicken/prawns + salad + fibre-rich veggies, 25-30g protein.</li>
-        </ul>
+        <h2>Simple 60g protein day</h2>
+        <p class="muted">No calorie obsession. Just hit protein, greens and fibre consistently.</p>
+        <div class="meal-plan-cards">
+          <div><strong>Breakfast</strong><span>2 eggs + curd bowl</span><b>~20g</b></div>
+          <div><strong>Lunch</strong><span>Chicken/fish + dal + greens</span><b>~30g</b></div>
+          <div><strong>Snack</strong><span>Roasted chana / egg / curd</span><b>~10g</b></div>
+          <div><strong>Dinner</strong><span>Prawns/fish/chicken + sabzi</span><b>~25g</b></div>
+        </div>
       </div>
       <div class="card">
-        <h2>Workout rhythm</h2>
+        <h2>Food rules</h2>
         <ul class="clean-list">
-          <li><strong>Mon:</strong> upper body strength.</li>
-          <li><strong>Tue:</strong> lower body strength.</li>
-          <li><strong>Wed:</strong> cardio + mobility.</li>
-          <li><strong>Thu:</strong> upper body + core.</li>
-          <li><strong>Fri:</strong> lower body + stamina.</li>
-          <li><strong>Sat:</strong> badminton together.</li>
-          <li><strong>Sun:</strong> recovery walk + review.</li>
+          <li>Protein target: 60g minimum per person.</li>
+          <li>Green veggies at lunch or dinner daily.</li>
+          <li>Fiber source daily: dal, veggies, fruits, sprouts, chana, oats.</li>
+          <li>Mutton avoided. Chicken, fish, eggs and prawns included.</li>
+          <li>One cheat meal per week. Not a full cheat day.</li>
         </ul>
       </div>
+    </section>
+
+    <section class="card">
+      <h2>Meal library</h2>
+      <div class="library-grid">
+        ${MEALS.flatMap((m) => m.presets.map(([text, protein]) => `<div class="library-card"><strong>${escapeHtml(text)}</strong><span>~${protein}g protein</span><small>${m.label}</small></div>`)).join('')}
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Recent food photos</h2>
+      <div class="photo-grid">
+        ${recent.length ? recent.map((p) => `<article><img src="${p.src}" alt="Meal"><span>${escapeHtml(p.name)} · ${friendlyDate(p.date)} · ${escapeHtml(p.meal)}</span></article>`).join('') : '<p class="muted">Meal photos will appear here after you upload them in daily check-in.</p>'}
+      </div>
+    </section>
+  `;
+}
+
+function progressView() {
+  const stats = getStats();
+  const monthlyAlcohol = PEOPLE.map((p) => ({ name: p.display_name, count: alcoholThisMonth(p.id) }));
+  return `
+    <section class="grid two">
       <div class="card">
-        <h2>Sleep contract</h2>
+        <h2>This week</h2>
+        <div class="big-bars">
+          ${stats.week.map((d) => `<div><span>${d.day}</span><i style="height:${Math.max(8, d.score * 18)}px"></i><b>${d.score}</b></div>`).join('')}
+        </div>
+      </div>
+      <div class="card">
+        <h2>Monthly alcohol limit</h2>
+        <p class="muted">Goal: drink only twice a month.</p>
+        <div class="limit-list">
+          ${monthlyAlcohol.map((p) => `<div><span>${escapeHtml(p.name)}</span><strong>${p.count}/${GOALS.alcoholMonthlyLimit}</strong></div>`).join('')}
+        </div>
+      </div>
+    </section>
+
+    <section class="person-grid">
+      ${PEOPLE.map((p) => {
+        const s = personAggregate(p.id);
+        return `<article class="card person-card"><h3>${escapeHtml(p.display_name)}</h3><div class="mini-metrics"><span>Protein hit <b>${s.proteinHit}/7</b></span><span>Steps hit <b>${s.stepsHit}/7</b></span><span>Smoke-free <b>${s.smokeFree}/7</b></span><span>Reading <b>${s.reading}/7</b></span><span>Mood slots <b>${s.moodSlots}/42</b></span></div></article>`;
+      }).join('')}
+    </section>
+  `;
+}
+
+function usView() {
+  const reflections = recentReflections();
+  const messages = state.messages.slice().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 8);
+  return `
+    <section class="grid two">
+      <div class="card">
+        <h2>Gratitude wall</h2>
+        <div class="reflection-wall">
+          ${reflections.length ? reflections.map((r) => `
+            <article>
+              <span>${escapeHtml(r.name)} · ${friendlyDate(r.date)}</span>
+              ${r.grateful ? `<p>🙏 ${escapeHtml(r.grateful)}</p>` : ''}
+              ${r.smile ? `<p>😊 ${escapeHtml(r.smile)}</p>` : ''}
+            </article>
+          `).join('') : '<p class="muted">Your gratitude and smile entries will appear here.</p>'}
+        </div>
+      </div>
+      <div class="card">
+        <h2>Sunday review</h2>
         <ul class="clean-list">
-          <li>11:15 PM phone cut-off.</li>
-          <li>15 minutes reading before sleep.</li>
-          <li>12:00 AM max lights out.</li>
-          <li>Wake target around 7:30 AM.</li>
+          <li>What went well this week?</li>
+          <li>Where did we support each other?</li>
+          <li>What habit was hardest?</li>
+          <li>What is one adjustment for next week?</li>
+          <li>One thing I appreciated about you:</li>
         </ul>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Message history</h2>
+      <div class="message-history">
+        ${messages.length ? messages.map((m) => `<div><strong>${escapeHtml(m.message_text)}</strong><span>${escapeHtml(m.author_name || personName(m.author_key || m.author_id))} · ${formatMessageDates(m)}</span></div>`).join('') : '<p class="muted">Tomorrow messages will be saved here.</p>'}
+      </div>
+    </section>
+  `;
+}
+
+function settingsView() {
+  return `
+    <section class="grid two">
+      <div class="card">
+        <h2>Private two-person setup</h2>
+        <p class="muted">This app is fixed for Sammy and Shreya. No invite code, no couple-space creation, no groups.</p>
+        <ul class="clean-list">
+          <li>Open the app.</li>
+          <li>Choose Sammy or Shreya.</li>
+          <li>Your side becomes editable.</li>
+          <li>Your partner's side stays visible for progress comparison.</li>
+        </ul>
+        <button class="ghost left" data-action="switch-person" type="button">Switch Sammy / Shreya</button>
+      </div>
+      <div class="card">
+        <h2>Data setup</h2>
+        <p class="muted">Prototype mode saves to this browser. Supabase mode will save the same structure to the cloud so both phones stay synced.</p>
+        <div class="actions-inline left">
+          <button class="ghost" data-action="export">Export backup JSON</button>
+          <label class="ghost file-label">Import backup <input type="file" accept="application/json" data-action="import" hidden /></label>
+        </div>
       </div>
     </section>
   `;
@@ -644,15 +1203,15 @@ function getStats() {
   const todaySteps = safeNumber(entry?.habits?.steps);
   const todayScore = safeNumber(entry?.score);
 
-  const weekDates = Array.from({ length: 7 }, (_, i) => daysAgo(6 - i));
+  const weekDates = Array.from({ length: 7 }, (_, i) => addDays(state.selectedDate, i - 6));
   const week = weekDates.map((date) => {
     const e = findEntry(personId, date);
-    return { day: new Date(date).toLocaleDateString(undefined, { weekday: 'short' }).slice(0, 3), score: safeNumber(e?.score) };
+    return { day: new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' }).slice(0, 3), score: safeNumber(e?.score) };
   });
 
   let streak = 0;
-  for (let i = 0; i < 45; i++) {
-    const date = daysAgo(i);
+  for (let i = 0; i < 90; i++) {
+    const date = addDays(state.selectedDate, -i);
     const e = findEntry(personId, date);
     if (!e || safeNumber(e.habits?.cigarettes) !== 0) break;
     streak += 1;
@@ -661,16 +1220,101 @@ function getStats() {
   return { todayProtein, todaySteps, todayScore, week, noCigStreak: streak };
 }
 
+function alcoholThisMonth(personId) {
+  const month = state.selectedDate.slice(0, 7);
+  return state.entries.filter((e) => (e.person_key || e.user_id) === personId && e.entry_date?.startsWith(month) && safeNumber(e.habits?.alcoholDrinks) > 0).length;
+}
+
+function personAggregate(personId) {
+  const dates = Array.from({ length: 7 }, (_, i) => addDays(state.selectedDate, i - 6));
+  const entries = dates.map((date) => findEntry(personId, date)).filter(Boolean);
+  return {
+    proteinHit: entries.filter((e) => totalMealProtein(e.meals) >= GOALS.protein).length,
+    stepsHit: entries.filter((e) => safeNumber(e.habits?.steps) >= GOALS.steps).length,
+    smokeFree: entries.filter((e) => safeNumber(e.habits?.cigarettes) === 0).length,
+    reading: entries.filter((e) => Boolean(e.habits?.reading)).length,
+    moodSlots: entries.reduce((sum, e) => sum + Object.values(e.habits?.moodTimeline || {}).filter((slot) => slot?.mood).length, 0),
+  };
+}
+
+function recentReflections() {
+  return state.entries
+    .filter((e) => e.reflection && (hasText(e.reflection.grateful) || hasText(e.reflection.smile)))
+    .sort((a, b) => b.entry_date.localeCompare(a.entry_date))
+    .slice(0, 10)
+    .map((e) => ({
+      name: personName(e.person_key || e.user_id),
+      date: e.entry_date,
+      grateful: e.reflection.grateful,
+      smile: e.reflection.smile,
+    }));
+}
+
+function recentMealPhotos() {
+  const photos = [];
+  state.entries
+    .slice()
+    .sort((a, b) => b.entry_date.localeCompare(a.entry_date))
+    .forEach((entry) => {
+      MEALS.forEach((meal) => {
+        const image = entry.meals?.[meal.key]?.image;
+        if (image) photos.push({ src: image, date: entry.entry_date, meal: meal.label, name: personName(entry.person_key || entry.user_id) });
+      });
+    });
+  return photos.slice(0, 12);
+}
+
 function bindEvents() {
   document.querySelector('[data-form="entry"]')?.addEventListener('submit', saveEntryFromForm);
   document.querySelector('[data-form="auth"]')?.addEventListener('submit', signIn);
-  document.querySelector('[data-form="create-couple"]')?.addEventListener('submit', (e) => onboarding(e, 'create'));
-  document.querySelector('[data-form="join-couple"]')?.addEventListener('submit', (e) => onboarding(e, 'join'));
   document.querySelector('[data-action="date"]')?.addEventListener('change', (e) => { state.selectedDate = e.target.value; render(); });
-  document.querySelector('[data-action="local-person"]')?.addEventListener('change', (e) => { state.localPerson = e.target.value; localStorage.setItem('localPerson', e.target.value); render(); });
   document.querySelector('[data-action="signout"]')?.addEventListener('click', signOut);
-  document.querySelector('[data-action="export"]')?.addEventListener('click', exportData);
-  document.querySelector('[data-action="import"]')?.addEventListener('change', importData);
+  document.querySelectorAll('[data-action="switch-person"]').forEach((node) => node.addEventListener('click', resetIdentity));
+  document.querySelectorAll('[data-action="export"]').forEach((node) => node.addEventListener('click', exportData));
+  document.querySelectorAll('[data-action="import"]').forEach((node) => node.addEventListener('change', importData));
+  document.querySelectorAll('[data-persona]').forEach((node) => node.addEventListener('click', () => chooseIdentity(node.dataset.persona)));
+  document.querySelectorAll('[data-view]').forEach((node) => {
+    node.addEventListener('click', () => {
+      state.activeView = node.dataset.view;
+      localStorage.setItem('betterUsActiveView', state.activeView);
+      render();
+    });
+  });
+  document.querySelectorAll('.preset').forEach((button) => button.addEventListener('click', () => addMealPreset(button)));
+  document.querySelectorAll('input[type="file"][accept="image/*"]').forEach((input) => input.addEventListener('change', previewImageInput));
+}
+
+function addMealPreset(button) {
+  const meal = button.dataset.meal;
+  const text = button.dataset.text;
+  const protein = safeNumber(button.dataset.protein);
+  const textarea = document.querySelector(`[name="${meal}_text"]`);
+  const proteinInput = document.querySelector(`[name="${meal}_protein"]`);
+  if (!textarea || !proteinInput) return;
+  textarea.value = textarea.value ? `${textarea.value}, ${text}` : text;
+  proteinInput.value = safeNumber(proteinInput.value) + protein;
+  button.classList.add('clicked');
+  setTimeout(() => button.classList.remove('clicked'), 450);
+}
+
+function previewImageInput(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const label = event.target.closest('label');
+    const existing = label?.querySelector('.photo-preview');
+    if (existing) {
+      existing.src = reader.result;
+      return;
+    }
+    const img = document.createElement('img');
+    img.className = 'photo-preview';
+    img.alt = 'Upload preview';
+    img.src = reader.result;
+    label?.appendChild(img);
+  };
+  reader.readAsDataURL(file);
 }
 
 function escapeHtml(value) {

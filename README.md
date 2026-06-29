@@ -1,118 +1,119 @@
-# Couple Health Habit Tracker
+# Better Us — Sammy × Shreya
 
-A fancy, interactive web app for a couple trying to build healthy habits together: meals, protein, workouts, steps, sleep, quit-cigarette streak, alcohol limits, cheat meal tracking, badminton, and buddy accountability.
+A private two-person habit web app for Sammy and Shreya.
 
-The app works in two modes:
+This version is intentionally not a generic couple-space app. There is no invite code and no create/join flow. When the app opens, the user selects:
 
-1. **Local demo mode**: no setup required, but data stays only in that browser.
-2. **Cloud couple mode**: use Supabase + Vercel so both partners can log in from any phone/laptop and progress does not disappear after redeploys.
+- I’m Sammy
+- I’m Shreya
 
-## Recommended setup
+That selected side becomes editable. The other side stays visible for comparison, support and accountability.
 
-Use **Vercel for hosting** and **Supabase for database + auth**.
+## Features
 
-Vercel should only host the front-end. Supabase stores the actual progress, so redeploying the Vercel app will not delete your daily logs.
+- Warm mobile-first UI
+- Fixed private profiles: Sammy and Shreya
+- Today dashboard with side-by-side comparison
+- Daily habit score
+- Protein-first meal logging
+- Meal photo upload option
+- Workout photo upload option
+- Steps, workout, sleep, water, mobility and reading tracking
+- Cigarette and alcohol tracking
+- Mood timeline every 3 hours from 9 AM to 12 AM
+- Daily gratitude entry
+- Daily “what made me smile” entry
+- Additional daily comments
+- Message/challenge for tomorrow with duration
+- Flashing top message cards
+- Progress dashboard
+- Gratitude wall
+- Local prototype mode
+- Supabase-ready cloud sync mode
 
-## What it tracks
+## Deploy without running locally
 
-- Daily meals: breakfast, lunch, snack, dinner
-- Protein grams per meal and daily protein total
-- Steps
-- Workout type and minutes
-- Badminton days
-- Cigarettes, with no-cigarette streak
-- Alcohol drinks
-- Cheat meal usage
-- Mobility
-- 15-minute reading before sleep
-- Sleep and wake time
-- Water intake
-- Mood and notes
-- Last 7-day score trend
-- Buddy accountability prompts
-
-## Local run
-
-```bash
-npm install
-npm run dev
-```
-
-Open the local URL shown in your terminal.
-
-## Supabase setup
-
-1. Create a project in Supabase.
-2. Go to **SQL Editor**.
-3. Copy everything from `supabase/schema.sql` and run it once.
-4. Go to **Project Settings > API** and copy:
-   - Project URL
-   - anon public key
-5. Create a `.env` file from `.env.example`:
-
-```bash
-cp .env.example .env
-```
-
-6. Paste your values:
-
-```bash
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key
-```
-
-7. Restart the app:
-
-```bash
-npm run dev
-```
-
-## Auth note
-
-For a private couple app, the easiest setup is email + password auth.
-
-In Supabase, if you do not want email confirmation during testing, go to:
-
-**Authentication > Providers > Email**
-
-Then adjust email confirmation settings based on your preference.
-
-## Couple onboarding flow
-
-1. Partner 1 signs up and signs in.
-2. Partner 1 creates the couple space and gets an invite code.
-3. Partner 2 signs up and signs in.
-4. Partner 2 joins using the invite code.
-5. Both partners can now see the couple dashboard and entries.
-
-## Deploy to Vercel
-
-1. Push this folder to GitHub.
-2. Import the repository in Vercel.
-3. Add environment variables in Vercel:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
+1. Unzip the repository.
+2. Upload the contents of this folder to GitHub.
+3. Import the GitHub repo in Vercel.
 4. Deploy.
-5. In Supabase, add your Vercel URL under:
-   **Authentication > URL Configuration > Site URL**
+5. Open the Vercel URL.
+6. Choose Sammy or Shreya and test the UI.
 
-## Data safety
+Your GitHub repo root should contain:
 
-Your data is safe from normal Vercel redeploys because the data is stored in Supabase, not inside Vercel.
+```txt
+index.html
+package.json
+vercel.json
+src/
+supabase/
+.env.example
+.gitignore
+README.md
+```
 
-Still, good practice:
+Do not upload the zip file itself.
 
-- Export a local JSON backup occasionally if using local demo mode.
-- For cloud mode, use Supabase backups or periodically export your database table if the tracker becomes important long-term.
-- Do not store medical records or sensitive documents inside this simple app.
+## Local prototype mode
 
-## Suggested next features
+If Supabase environment variables are missing, the app works in local browser mode.
 
-- Monthly calendar heatmap
-- Couple badges and streak animations
-- Weekly PDF report
-- Push notifications
-- Google Fit / Apple Health step sync
-- Meal photo uploads
-- Weight and measurements tracker
-- Progress charts
+This is good for UI testing, but it will not sync between both phones.
+
+Local mode saves data in the browser using localStorage. You can use the backup export/import buttons in Settings.
+
+## Supabase cloud mode
+
+When you are happy with the UI, create a Supabase project.
+
+Then run:
+
+```txt
+supabase/schema.sql
+```
+
+in Supabase SQL Editor.
+
+Then add these environment variables in Vercel:
+
+```txt
+VITE_SUPABASE_URL=your_supabase_project_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_public_key
+```
+
+Redeploy the Vercel app after adding environment variables.
+
+## Important data note
+
+Food and workout images are compressed in-browser and saved as image data inside the entry JSON.
+
+This is fine for a private MVP/prototype. Later, if the app grows, move images into Supabase Storage and keep only image URLs in the database.
+
+## Supabase behavior
+
+After login:
+
+1. The app asks whether the current user is Sammy or Shreya.
+2. It saves that identity in the `profiles` table.
+3. That person can edit only their own daily entries.
+4. Both people can view both sides of the shared dashboard.
+
+The couple ID is fixed as:
+
+```txt
+sammy-shreya-private
+```
+
+## Build settings for Vercel
+
+Vercel should detect Vite automatically.
+
+Expected settings:
+
+```txt
+Framework Preset: Vite
+Build Command: npm run build
+Output Directory: dist
+Install Command: npm install
+```
