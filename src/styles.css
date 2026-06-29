@@ -113,7 +113,7 @@ h3 { margin: 26px 0 14px; letter-spacing: -0.025em; }
 
 .topbar {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr) 180px auto;
+  grid-template-columns: 200px minmax(0, 1fr) 240px;
   gap: 14px;
   align-items: end;
   margin-bottom: 18px;

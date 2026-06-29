@@ -2,17 +2,20 @@
 
 A private two-person habit web app for Sammy and Shreya.
 
-This version is intentionally not a generic couple-space app. There is no invite code and no create/join flow. When the app opens, the user selects:
+This version has **no login**, **no invite code**, and **no create couple space** flow.
+
+When the app opens, the user selects:
 
 - I’m Sammy
 - I’m Shreya
 
-That selected side becomes editable. The other side stays visible for comparison, support and accountability.
+That selected side becomes editable. The other side stays visible for comparison, support, and accountability.
 
 ## Features
 
 - Warm mobile-first UI
 - Fixed private profiles: Sammy and Shreya
+- First-screen identity picker
 - Today dashboard with side-by-side comparison
 - Daily habit score
 - Protein-first meal logging
@@ -29,7 +32,7 @@ That selected side becomes editable. The other side stays visible for comparison
 - Progress dashboard
 - Gratitude wall
 - Local prototype mode
-- Supabase-ready cloud sync mode
+- Supabase no-login cloud sync mode
 
 ## Deploy without running locally
 
@@ -63,7 +66,7 @@ This is good for UI testing, but it will not sync between both phones.
 
 Local mode saves data in the browser using localStorage. You can use the backup export/import buttons in Settings.
 
-## Supabase cloud mode
+## Supabase no-login cloud mode
 
 When you are happy with the UI, create a Supabase project.
 
@@ -84,7 +87,18 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_public_key
 
 Redeploy the Vercel app after adding environment variables.
 
-## Important data note
+The app will then use Supabase directly with the public anon key. No Supabase Auth is used.
+
+## Important privacy note
+
+Because this version has no login, anyone with the Vercel URL can view or edit the tracker data. Keep the app link private.
+
+For stronger privacy later, add either:
+
+- a simple shared passcode screen, or
+- Supabase Auth login.
+
+## Important image note
 
 Food and workout images are compressed in-browser and saved as image data inside the entry JSON.
 
@@ -92,14 +106,11 @@ This is fine for a private MVP/prototype. Later, if the app grows, move images i
 
 ## Supabase behavior
 
-After login:
-
-1. The app asks whether the current user is Sammy or Shreya.
-2. It saves that identity in the `profiles` table.
-3. That person can edit only their own daily entries.
+1. The app opens.
+2. User selects Sammy or Shreya.
+3. The selected person can edit their own daily entries.
 4. Both people can view both sides of the shared dashboard.
-
-The couple ID is fixed as:
+5. Data saves to the same fixed couple ID:
 
 ```txt
 sammy-shreya-private

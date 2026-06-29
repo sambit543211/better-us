@@ -82,8 +82,6 @@ const MOOD_SLOTS = [
 const MOOD_OPTIONS = ['', 'Great', 'Good', 'Okay', 'Low', 'Stressed', 'Tired', 'Calm', 'Irritated'];
 
 const state = {
-  session: null,
-  profile: null,
   entries: [],
   messages: [],
   selectedDate: localDate(),
@@ -160,7 +158,6 @@ function orderedPeople() {
 }
 
 function currentPersonId() {
-  if (hasCloud && state.profile?.persona) return state.profile.persona;
   return state.selectedPerson;
 }
 
@@ -186,15 +183,6 @@ function setLocalMessages(messages) {
 }
 
 async function boot() {
-  if (hasCloud) {
-    const { data } = await supabase.auth.getSession();
-    state.session = data.session;
-    supabase.auth.onAuthStateChange(async (_event, session) => {
-      state.session = session;
-      await hydrate();
-      render();
-    });
-  }
   await hydrate();
   render();
 }
@@ -206,28 +194,6 @@ async function hydrate() {
     state.entries = getLocalEntries();
     state.messages = getLocalMessages();
     return;
-  }
-
-  if (!state.session) {
-    state.profile = null;
-    state.entries = [];
-    state.messages = [];
-    return;
-  }
-
-  const userId = state.session.user.id;
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if (profileError) state.message = profileError.message;
-  state.profile = profile;
-
-  if (profile?.persona) {
-    state.selectedPerson = profile.persona;
-    localStorage.setItem('betterUsSelectedPerson', profile.persona);
   }
 
   const since = daysAgo(90);
@@ -335,18 +301,8 @@ function calculateScore(habits, meals, reflection) {
 async function chooseIdentity(persona) {
   state.selectedPerson = persona;
   localStorage.setItem('betterUsSelectedPerson', persona);
-
-  if (hasCloud && state.session) {
-    const person = getPerson(persona);
-    const { error } = await supabase.from('profiles').upsert({
-      id: state.session.user.id,
-      couple_id: FIXED_COUPLE_ID,
-      persona,
-      display_name: person.display_name,
-    });
-    state.message = error ? error.message : `Signed in as ${person.display_name}.`;
-    await hydrate();
-  }
+  state.message = `You are using the app as ${personName(persona)}.`;
+  await hydrate();
   render();
 }
 
@@ -501,28 +457,6 @@ function compressImage(file, maxSide = 1100, quality = 0.78) {
   });
 }
 
-async function signIn(event) {
-  event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  const email = form.get('email')?.toString();
-  const password = form.get('password')?.toString();
-  const mode = form.get('mode')?.toString();
-  const action = mode === 'signup' ? supabase.auth.signUp : supabase.auth.signInWithPassword;
-  const { error } = await action.call(supabase.auth, { email, password });
-  state.message = error ? error.message : mode === 'signup' ? 'Account created. Check email if confirmation is enabled, then sign in.' : 'Signed in. Now choose Sammy or Shreya.';
-  await hydrate();
-  render();
-}
-
-async function signOut() {
-  await supabase.auth.signOut();
-  state.session = null;
-  state.profile = null;
-  state.entries = [];
-  state.messages = [];
-  render();
-}
-
 function resetIdentity() {
   state.selectedPerson = '';
   localStorage.removeItem('betterUsSelectedPerson');
@@ -568,10 +502,8 @@ function render() {
     <main class="shell">
       ${hero()}
       ${state.message ? `<div class="toast">${escapeHtml(state.message)}</div>` : ''}
-      ${!hasCloud ? localModeBanner() : ''}
-      ${hasCloud && !state.session ? authView() : ''}
-      ${(!hasCloud || state.session) && !currentPersonId() ? identityPicker() : ''}
-      ${(!hasCloud || state.session) && currentPersonId() ? appView() : ''}
+      ${!hasCloud ? localModeBanner() : noLoginCloudBanner()}
+      ${!currentPersonId() ? identityPicker() : appView()}
     </main>
   `;
   bindEvents();
@@ -591,7 +523,7 @@ function hero() {
       <div class="hero-card floaty">
         <span class="heart">♥</span>
         <strong>${escapeHtml(currentDisplayName())}</strong>
-        <small>${hasCloud ? 'Cloud sync ready' : 'Local prototype'}</small>
+        <small>${hasCloud ? 'No-login cloud sync' : 'Local prototype'}</small>
       </div>
     </section>
   `;
@@ -602,7 +534,7 @@ function localModeBanner() {
     <section class="notice-grid">
       <div class="notice">
         <strong>Prototype mode is active.</strong>
-        <p>Test the look and feel on Vercel now. Supabase can be connected later for shared phone sync and permanent data.</p>
+        <p>Data is saved only in this browser. Connect Supabase when you want Sammy and Shreya to sync from different phones.</p>
       </div>
       <div class="notice actions-inline">
         <button class="ghost" data-action="export">Export backup JSON</button>
@@ -612,20 +544,17 @@ function localModeBanner() {
   `;
 }
 
-function authView() {
+function noLoginCloudBanner() {
   return `
-    <section class="card narrow auth-card">
-      <h2>Sign in</h2>
-      <p class="muted">After login, choose whether this device is Sammy or Shreya. No invite code or couple space needed.</p>
-      <form class="stack" data-form="auth">
-        <input name="email" type="email" placeholder="Email" required />
-        <input name="password" type="password" placeholder="Password" minlength="6" required />
-        <div class="segmented">
-          <label><input type="radio" name="mode" value="signin" checked /> Sign in</label>
-          <label><input type="radio" name="mode" value="signup" /> Create account</label>
-        </div>
-        <button type="submit">Continue</button>
-      </form>
+    <section class="notice-grid">
+      <div class="notice">
+        <strong>No-login cloud mode is active.</strong>
+        <p>Open the site, choose Sammy or Shreya, and save entries directly to Supabase. No account, no invite code, no couple space.</p>
+      </div>
+      <div class="notice">
+        <strong>Private link rule</strong>
+        <p>Anyone with this app link can view or edit data, so keep the Vercel URL private.</p>
+      </div>
     </section>
   `;
 }
@@ -678,9 +607,8 @@ function topBar() {
       </div>
       <div>
         <label>View</label>
-        <div class="pill good">${hasCloud ? 'Supabase cloud' : 'Local browser'}</div>
+        <div class="pill good">${hasCloud ? 'Supabase no-login sync' : 'Local browser'}</div>
       </div>
-      ${hasCloud ? `<button class="ghost" data-action="signout">Sign out</button>` : ''}
     </section>
   `;
 }
@@ -1186,7 +1114,7 @@ function settingsView() {
       </div>
       <div class="card">
         <h2>Data setup</h2>
-        <p class="muted">Prototype mode saves to this browser. Supabase mode will save the same structure to the cloud so both phones stay synced.</p>
+        <p class="muted">Local mode saves to one browser. Supabase no-login mode saves to the cloud so both phones stay synced after choosing Sammy or Shreya.</p>
         <div class="actions-inline left">
           <button class="ghost" data-action="export">Export backup JSON</button>
           <label class="ghost file-label">Import backup <input type="file" accept="application/json" data-action="import" hidden /></label>
@@ -1266,9 +1194,7 @@ function recentMealPhotos() {
 
 function bindEvents() {
   document.querySelector('[data-form="entry"]')?.addEventListener('submit', saveEntryFromForm);
-  document.querySelector('[data-form="auth"]')?.addEventListener('submit', signIn);
   document.querySelector('[data-action="date"]')?.addEventListener('change', (e) => { state.selectedDate = e.target.value; render(); });
-  document.querySelector('[data-action="signout"]')?.addEventListener('click', signOut);
   document.querySelectorAll('[data-action="switch-person"]').forEach((node) => node.addEventListener('click', resetIdentity));
   document.querySelectorAll('[data-action="export"]').forEach((node) => node.addEventListener('click', exportData));
   document.querySelectorAll('[data-action="import"]').forEach((node) => node.addEventListener('change', importData));
