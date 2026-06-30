@@ -88,6 +88,9 @@ const state = {
   activeView: localStorage.getItem('betterUsActiveView') || 'today',
   selectedPerson: localStorage.getItem('betterUsSelectedPerson') || '',
   message: '',
+  syncStatus: hasCloud ? 'checking' : 'local',
+  lastSyncError: '',
+  lastSyncAt: '',
 };
 
 function localDate(date = new Date()) {
@@ -193,30 +196,54 @@ async function hydrate() {
   if (!hasCloud) {
     state.entries = getLocalEntries();
     state.messages = getLocalMessages();
+    state.syncStatus = 'local';
+    state.lastSyncError = '';
     return;
   }
 
-  const since = daysAgo(90);
-  const [entriesResult, messagesResult] = await Promise.all([
-    supabase
-      .from('daily_entries')
-      .select('*')
-      .eq('couple_id', FIXED_COUPLE_ID)
-      .gte('entry_date', since)
-      .order('entry_date', { ascending: false }),
-    supabase
-      .from('message_cards')
-      .select('*')
-      .eq('couple_id', FIXED_COUPLE_ID)
-      .gte('end_date', since)
-      .order('created_at', { ascending: false }),
-  ]);
+  state.syncStatus = 'checking';
 
-  if (entriesResult.error) state.message = entriesResult.error.message;
-  if (messagesResult.error) state.message = messagesResult.error.message;
+  try {
+    const since = daysAgo(90);
+    const [entriesResult, messagesResult] = await Promise.all([
+      supabase
+        .from('daily_entries')
+        .select('*')
+        .eq('couple_id', FIXED_COUPLE_ID)
+        .gte('entry_date', since)
+        .order('entry_date', { ascending: false }),
+      supabase
+        .from('message_cards')
+        .select('*')
+        .eq('couple_id', FIXED_COUPLE_ID)
+        .gte('end_date', since)
+        .order('created_at', { ascending: false }),
+    ]);
 
-  state.entries = entriesResult.data || [];
-  state.messages = messagesResult.data || [];
+    if (entriesResult.error || messagesResult.error) {
+      throw entriesResult.error || messagesResult.error;
+    }
+
+    state.entries = entriesResult.data || [];
+    state.messages = messagesResult.data || [];
+    state.syncStatus = 'connected';
+    state.lastSyncError = '';
+    state.lastSyncAt = new Date().toISOString();
+  } catch (error) {
+    // Keep the app clean and usable even if Supabase is not connected yet,
+    // the schema is missing, or the network blocks a request.
+    state.entries = getLocalEntries();
+    state.messages = getLocalMessages();
+    state.syncStatus = 'fallback';
+    state.lastSyncError = readableSyncError(error);
+  }
+}
+
+function readableSyncError(error) {
+  const raw = error?.message || String(error || 'Cloud sync failed');
+  if (/failed to fetch|load failed|network/i.test(raw)) return 'Supabase could not be reached from this browser/network.';
+  if (/relation .* does not exist|schema|table/i.test(raw)) return 'Supabase schema may not be created yet. Run supabase/schema.sql.';
+  return raw;
 }
 
 function blankMoodTimeline() {
@@ -301,7 +328,6 @@ function calculateScore(habits, meals, reflection) {
 async function chooseIdentity(persona) {
   state.selectedPerson = persona;
   localStorage.setItem('betterUsSelectedPerson', persona);
-  state.message = `You are using the app as ${personName(persona)}.`;
   await hydrate();
   render();
 }
@@ -372,33 +398,7 @@ async function saveEntryFromForm(event) {
   const end_date = addDays(start_date, messageDuration - 1);
   const audience = form.get('messageAudience')?.toString() || 'both';
 
-  if (hasCloud) {
-    const { error } = await supabase
-      .from('daily_entries')
-      .upsert({ person_key, couple_id, entry_date, meals, habits, reflection, score }, { onConflict: 'couple_id,person_key,entry_date' });
-
-    if (error) {
-      state.message = error.message;
-      await hydrate();
-      render();
-      return;
-    }
-
-    if (tomorrowMessage) {
-      const { error: messageError } = await supabase.from('message_cards').insert({
-        couple_id,
-        author_key: person_key,
-        author_name: currentDisplayName(),
-        message_text: tomorrowMessage,
-        audience,
-        start_date,
-        end_date,
-      });
-      if (messageError) state.message = messageError.message;
-    }
-
-    if (!state.message) state.message = `${currentDisplayName()}'s day is saved.`;
-  } else {
+  const saveLocally = () => {
     const entries = getLocalEntries().filter((e) => !((e.person_key || e.user_id) === person_key && e.entry_date === entry_date));
     entries.push({ id: uid(), person_key, user_id: person_key, couple_id, entry_date, meals, habits, reflection, score, updated_at: new Date().toISOString() });
     setLocalEntries(entries);
@@ -421,7 +421,34 @@ async function saveEntryFromForm(event) {
       setLocalMessages(messages);
       state.messages = messages;
     }
-    state.message = `${currentDisplayName()}'s day is saved in this browser.`;
+  };
+
+  if (hasCloud) {
+    try {
+      const { error } = await supabase
+        .from('daily_entries')
+        .upsert({ person_key, couple_id, entry_date, meals, habits, reflection, score }, { onConflict: 'couple_id,person_key,entry_date' });
+
+      if (error) throw error;
+
+      if (tomorrowMessage) {
+        const { error: messageError } = await supabase.from('message_cards').insert({
+          couple_id,
+          author_key: person_key,
+          author_name: currentDisplayName(),
+          message_text: tomorrowMessage,
+          audience,
+          start_date,
+          end_date,
+        });
+        if (messageError) throw messageError;
+      }
+    } catch (error) {
+      // If Supabase is not ready yet, save on the device without showing error cards.
+      saveLocally();
+    }
+  } else {
+    saveLocally();
   }
 
   await hydrate();
@@ -501,8 +528,6 @@ function render() {
   app.innerHTML = `
     <main class="shell">
       ${hero()}
-      ${state.message ? `<div class="toast">${escapeHtml(state.message)}</div>` : ''}
-      ${!hasCloud ? localModeBanner() : noLoginCloudBanner()}
       ${!currentPersonId() ? identityPicker() : appView()}
     </main>
   `;
@@ -523,7 +548,6 @@ function hero() {
       <div class="hero-card floaty">
         <span class="heart">♥</span>
         <strong>${escapeHtml(currentDisplayName())}</strong>
-        <small>${hasCloud ? 'No-login cloud sync' : 'Local prototype'}</small>
       </div>
     </section>
   `;
@@ -606,11 +630,18 @@ function topBar() {
         </div>
       </div>
       <div>
-        <label>View</label>
-        <div class="pill good">${hasCloud ? 'Supabase no-login sync' : 'Local browser'}</div>
+        <label>Storage</label>
+        <div class="pill ${state.syncStatus === 'connected' ? 'good' : state.syncStatus === 'fallback' ? 'warn' : ''}">${syncLabel()}</div>
       </div>
     </section>
   `;
+}
+
+function syncLabel() {
+  if (!hasCloud) return 'Local browser';
+  if (state.syncStatus === 'connected') return 'Cloud sync on';
+  if (state.syncStatus === 'fallback') return 'Local fallback';
+  return 'Checking sync';
 }
 
 function navTabs() {
@@ -1112,15 +1143,54 @@ function settingsView() {
         </ul>
         <button class="ghost left" data-action="switch-person" type="button">Switch Sammy / Shreya</button>
       </div>
+      <div class="card status-card">
+        <h2>App status</h2>
+        ${syncStatusCard()}
+      </div>
       <div class="card">
-        <h2>Data setup</h2>
-        <p class="muted">Local mode saves to one browser. Supabase no-login mode saves to the cloud so both phones stay synced after choosing Sammy or Shreya.</p>
+        <h2>Data backup</h2>
+        <p class="muted">Use this only when you want to keep a manual backup or move local test data.</p>
         <div class="actions-inline left">
           <button class="ghost" data-action="export">Export backup JSON</button>
           <label class="ghost file-label">Import backup <input type="file" accept="application/json" data-action="import" hidden /></label>
         </div>
       </div>
+      <div class="card">
+        <h2>Private link rule</h2>
+        <p class="muted">There is no login in this version. Anyone with the Vercel link can open the app, view data, or edit entries. Keep the link private.</p>
+      </div>
     </section>
+  `;
+}
+
+function syncStatusCard() {
+  if (!hasCloud) {
+    return `
+      <div class="status-row warn-soft"><span>Cloud sync</span><strong>Not connected</strong></div>
+      <p class="muted">The app is currently saving only in this browser. Sammy and Shreya will not sync across phones until Supabase environment variables are added in Vercel and the app is redeployed.</p>
+    `;
+  }
+
+  if (state.syncStatus === 'connected') {
+    return `
+      <div class="status-row good-soft"><span>Cloud sync</span><strong>Connected</strong></div>
+      <p class="muted">Entries are being read from Supabase. Updates should sync across Sammy and Shreya's devices.</p>
+      ${state.lastSyncAt ? `<p class="tiny-muted">Last checked: ${new Date(state.lastSyncAt).toLocaleString()}</p>` : ''}
+    `;
+  }
+
+  if (state.syncStatus === 'fallback') {
+    return `
+      <div class="status-row warn-soft"><span>Cloud sync</span><strong>Local fallback</strong></div>
+      <p class="muted">The app could not load Supabase, so it is quietly saving to this browser for now.</p>
+      <p class="sync-error">${escapeHtml(state.lastSyncError || 'Cloud sync failed.')}</p>
+      <p class="tiny-muted">Check Vercel environment variables, Supabase URL/key, and whether the schema.sql file has been run.</p>
+    `;
+  }
+
+  return `
+    <div class="status-row"><span>Cloud sync</span><strong>Checking</strong></div>
+    <p class="muted">The app is checking Supabase connection.</p>
   `;
 }
 
