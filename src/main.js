@@ -431,6 +431,11 @@ async function saveEntryFromForm(event) {
 
       if (error) throw error;
 
+      // Mirror to local storage so fallback mode has fresh data if cloud goes down.
+      const localEntries = getLocalEntries().filter((e) => !((e.person_key || e.user_id) === person_key && e.entry_date === entry_date));
+      localEntries.push({ id: uid(), person_key, user_id: person_key, couple_id, entry_date, meals, habits, reflection, score, updated_at: new Date().toISOString() });
+      setLocalEntries(localEntries);
+
       if (tomorrowMessage) {
         const { error: messageError } = await supabase.from('message_cards').insert({
           couple_id,
@@ -442,6 +447,20 @@ async function saveEntryFromForm(event) {
           end_date,
         });
         if (messageError) throw messageError;
+        const localMessages = getLocalMessages();
+        localMessages.push({
+          id: uid(),
+          couple_id,
+          author_key: person_key,
+          author_id: person_key,
+          author_name: currentDisplayName(),
+          message_text: tomorrowMessage,
+          audience,
+          start_date,
+          end_date,
+          created_at: new Date().toISOString(),
+        });
+        setLocalMessages(localMessages);
       }
     } catch (error) {
       // If Supabase is not ready yet, save on the device without showing error cards.
@@ -528,6 +547,7 @@ function render() {
   app.innerHTML = `
     <main class="shell">
       ${hero()}
+      ${state.message ? `<div class="toast" role="alert">${escapeHtml(state.message)}</div>` : ''}
       ${!currentPersonId() ? identityPicker() : appView()}
     </main>
   `;
@@ -568,20 +588,6 @@ function localModeBanner() {
   `;
 }
 
-function noLoginCloudBanner() {
-  return `
-    <section class="notice-grid">
-      <div class="notice">
-        <strong>No-login cloud mode is active.</strong>
-        <p>Open the site, choose Sammy or Shreya, and save entries directly to Supabase. No account, no invite code, no couple space.</p>
-      </div>
-      <div class="notice">
-        <strong>Private link rule</strong>
-        <p>Anyone with this app link can view or edit data, so keep the Vercel URL private.</p>
-      </div>
-    </section>
-  `;
-}
 
 function identityPicker() {
   return `
@@ -607,6 +613,7 @@ function identityPicker() {
 function appView() {
   return `
     ${topBar()}
+    ${!hasCloud ? localModeBanner() : ''}
     ${activeMessageStrip()}
     ${navTabs()}
     ${viewContent()}
@@ -1304,6 +1311,7 @@ function previewImageInput(event) {
       existing.src = reader.result;
       return;
     }
+    label?.querySelector('small')?.remove();
     const img = document.createElement('img');
     img.className = 'photo-preview';
     img.alt = 'Upload preview';
